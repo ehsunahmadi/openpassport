@@ -23,9 +23,9 @@ type ConfirmBelongingScreenProps = StaticScreenProps<
 
 const ConfirmBelongingScreen: React.FC<ConfirmBelongingScreenProps> = ({
   route,
-}) => {
+}: ConfirmBelongingScreenProps) => {
   const { loginWithBiometrics } = useAuth();
-  const mockPassportFlow = route.params?.mockPassportFlow;
+  const mockPassportFlow: boolean | undefined = route.params?.mockPassportFlow;
   const goToLoadingScreen = useHapticNavigation('LoadingScreen', {
     params: {
       mockPassportFlow,

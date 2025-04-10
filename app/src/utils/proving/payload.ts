@@ -1,4 +1,5 @@
 import { LeanIMT } from '@openpassport/zk-kit-lean-imt';
+import { SMT } from '@openpassport/zk-kit-smt';
 import { poseidon2 } from 'poseidon-lite';
 
 import {
@@ -7,24 +8,16 @@ import {
   PASSPORT_ATTESTATION_ID,
   WS_RPC_URL_VC_AND_DISCLOSE,
 } from '../../../../common/src/constants/constants';
-import { EndpointType, SelfApp } from '../../../../common/src/utils/appType';
+import { SelfApp } from '../../../../common/src/utils/appType';
 import { getCircuitNameFromPassportData } from '../../../../common/src/utils/circuits/circuitsName';
 import {
   generateCommitment,
   generateNullifier,
 } from '../../../../common/src/utils/passports/passport';
-import {
-  getCommitmentTree,
-  getDSCTree,
-  getLeafDscTree,
-} from '../../../../common/src/utils/trees';
+import { getLeafDscTree } from '../../../../common/src/utils/trees';
 import { PassportData } from '../../../../common/src/utils/types';
 import { ProofStatusEnum } from '../../stores/proofProvider';
-import {
-  generateTeeInputsDsc,
-  generateTeeInputsRegister,
-  generateTeeInputsVCAndDisclose,
-} from './inputs';
+import { EndpointType } from './../../../../common/src/utils/appType';
 import { sendPayload } from './tee';
 
 export type PassportSupportStatus =
@@ -33,26 +26,55 @@ export type PassportSupportStatus =
   | 'registration_circuit_not_supported'
   | 'dsc_circuit_not_supported'
   | 'passport_supported';
-export async function checkPassportSupported(
-  passportData: PassportData,
-): Promise<{
+
+export interface PassportSupportCheckResult {
   status: PassportSupportStatus;
-  details: string;
-}> {
+  dscCircuitName?: string;
+  registerCircuitName?: string;
+  error?: Error;
+  endpointType?: EndpointType;
+}
+
+export interface RegistrationPayload {
+  inputs: any;
+  registerCircuitName: string;
+  circuitDNSMapping: Record<string, string>;
+  endpointType: EndpointType;
+}
+
+export interface ofacSMTs {
+  passportNoAndNationalitySMT: SMT;
+  nameAndDobSMT: SMT;
+  nameAndYobSMT: SMT;
+}
+
+export function checkPassportSupported(
+  passportData: PassportData,
+  deployedCircuits: any,
+): PassportSupportCheckResult {
   const passportMetadata = passportData.passportMetadata;
   if (!passportMetadata) {
     console.log('Passport metadata is null');
-    return { status: 'passport_metadata_missing', details: passportData.dsc };
+    return {
+      status: 'passport_metadata_missing',
+      error: new Error(
+        `passport metadata is missing for passport with dsc: ${passportData.dsc}`,
+      ),
+    };
   }
   if (!passportMetadata.cscaFound) {
     console.log('CSCA not found');
-    return { status: 'csca_not_found', details: passportData.dsc };
+    return {
+      status: 'csca_not_found',
+      error: new Error(
+        `csca not found for passport with dsc: ${passportData.dsc}`,
+      ),
+    };
   }
   const circuitNameRegister = getCircuitNameFromPassportData(
     passportData,
     'register',
   );
-  const deployedCircuits = await getDeployedCircuits(passportData.documentType);
   console.log('circuitNameRegister', circuitNameRegister);
   if (
     !circuitNameRegister ||
@@ -60,50 +82,37 @@ export async function checkPassportSupported(
   ) {
     return {
       status: 'registration_circuit_not_supported',
-      details: circuitNameRegister,
+      error: new Error(
+        `Registration circuit not supported: ${circuitNameRegister}`,
+      ),
+      registerCircuitName: circuitNameRegister,
     };
   }
   const circuitNameDsc = getCircuitNameFromPassportData(passportData, 'dsc');
   if (!circuitNameDsc || !deployedCircuits.DSC.includes(circuitNameDsc)) {
     console.log('DSC circuit not supported:', circuitNameDsc);
-    return { status: 'dsc_circuit_not_supported', details: circuitNameDsc };
+    return {
+      status: 'dsc_circuit_not_supported',
+      error: new Error(`dsc circuit not supported: ${circuitNameDsc}`),
+      dscCircuitName: circuitNameDsc,
+      registerCircuitName: circuitNameRegister,
+    };
   }
   console.log('Passport supported');
-  return { status: 'passport_supported', details: 'null' };
+  return {
+    status: 'passport_supported',
+    registerCircuitName: circuitNameRegister,
+    dscCircuitName: circuitNameDsc,
+  };
 }
 
-export async function sendRegisterPayload(
-  passportData: PassportData,
-  secret: string,
-  circuitDNSMapping: Record<string, string>,
-  endpointType: EndpointType,
-) {
-  const { inputs, circuitName } = await generateTeeInputsRegister(
-    secret,
-    passportData,
-    endpointType,
-  );
-  await sendPayload(
-    inputs,
-    'register',
-    circuitName,
-    endpointType,
-    'https://self.xyz',
-    (circuitDNSMapping as any).REGISTER[circuitName],
-    undefined,
-    {
-      updateGlobalOnSuccess: true,
-      updateGlobalOnFailure: true,
-      flow: 'registration',
-    },
-  );
-}
-
-async function checkIdPassportDscIsInTree(
+export async function checkIdPassportDscIsInTree(
   passportData: PassportData,
   dscTree: string,
   circuitDNSMapping: Record<string, string>,
   endpointType: EndpointType,
+  dscCircuitName: string,
+  dscInputs: any,
 ): Promise<boolean> {
   const hashFunction = (a: any, b: any) => poseidon2([a, b]);
   const tree = LeanIMT.import(hashFunction, dscTree);
@@ -119,6 +128,8 @@ async function checkIdPassportDscIsInTree(
       passportData,
       circuitDNSMapping,
       endpointType,
+      dscCircuitName,
+      dscInputs,
     );
     if (dscStatus !== ProofStatusEnum.SUCCESS) {
       console.log('DSC proof failed');
@@ -140,6 +151,8 @@ export async function sendDscPayload(
   passportData: PassportData,
   circuitDNSMapping: Record<string, string>,
   endpointType: EndpointType,
+  dscCircuitName: string,
+  inputs: any,
 ): Promise<ProofStatusEnum | false> {
   if (!passportData) {
     return false;
@@ -149,41 +162,26 @@ export async function sendDscPayload(
   //   console.log('Passport not supported');
   //   return false;
   // }
-  const { inputs, circuitName } = await generateTeeInputsDsc(
-    passportData,
-    endpointType,
-  );
+  console.log('sendDscPayload');
 
   const dscStatus = await sendPayload(
     inputs,
     'dsc',
-    circuitName,
+    dscCircuitName,
     endpointType,
     'https://self.xyz',
-    (circuitDNSMapping.DSC as any)[circuitName],
+    (circuitDNSMapping.DSC as any)[dscCircuitName],
     undefined,
     { updateGlobalOnSuccess: false },
   );
   return dscStatus;
 }
 
-export async function sendVcAndDisclosePayload(
-  secret: string,
-  passportData: PassportData | null,
-  selfApp: SelfApp,
-) {
-  if (!passportData) {
-    return null;
-  }
-  const { inputs, circuitName } = await generateTeeInputsVCAndDisclose(
-    secret,
-    passportData,
-    selfApp,
-  );
+export async function sendVcAndDisclosePayload(selfApp: SelfApp, inputs: any) {
   return await sendPayload(
     inputs,
     'vc_and_disclose',
-    circuitName,
+    'vc_and_disclose',
     selfApp.endpointType,
     selfApp.endpoint,
     WS_RPC_URL_VC_AND_DISCLOSE,
@@ -198,9 +196,10 @@ export async function sendVcAndDisclosePayload(
 
 /*** Logic Flow ****/
 
-export async function isUserRegistered(
+export function isUserRegistered(
   passportData: PassportData,
   secret: string,
+  serializedTree: string,
 ) {
   if (!passportData) {
     return false;
@@ -210,7 +209,6 @@ export async function isUserRegistered(
     PASSPORT_ATTESTATION_ID,
     passportData,
   );
-  const serializedTree = await getCommitmentTree(passportData.documentType);
   const tree = LeanIMT.import((a, b) => poseidon2([a, b]), serializedTree);
   const index = tree.indexOf(BigInt(commitment));
   return index !== -1;
@@ -230,37 +228,6 @@ export async function isPassportNullified(passportData: PassportData) {
   const data = await response.json();
   console.log('isPassportNullified', data);
   return data.data;
-}
-
-export async function registerPassport(
-  passportData: PassportData,
-  secret: string,
-) {
-  // First get the mapping, then use it for the check
-  const endpointType =
-    passportData.documentType && passportData.documentType === 'mock_passport'
-      ? 'staging_celo'
-      : 'celo';
-  const [circuitDNSMapping, dscTree] = await Promise.all([
-    getCircuitDNSMapping(endpointType),
-    getDSCTree(endpointType),
-  ]);
-  console.log('circuitDNSMapping', circuitDNSMapping);
-  const dscOk = await checkIdPassportDscIsInTree(
-    passportData,
-    dscTree,
-    circuitDNSMapping,
-    endpointType,
-  );
-  if (!dscOk) {
-    return;
-  }
-  await sendRegisterPayload(
-    passportData,
-    secret,
-    circuitDNSMapping,
-    endpointType,
-  );
 }
 
 export async function getDeployedCircuits(documentType: string) {
@@ -296,7 +263,6 @@ export async function getDeployedCircuits(documentType: string) {
     throw new Error('API returned invalid JSON response - server may be down');
   }
 }
-
 export async function getCircuitDNSMapping(endpointType?: EndpointType) {
   console.log('Fetching deployed circuits from api');
   const baseUrl =
@@ -304,7 +270,6 @@ export async function getCircuitDNSMapping(endpointType?: EndpointType) {
       ? API_URL
       : API_URL_STAGING;
   const response = await fetch(`${baseUrl}/circuit-dns-mapping/`);
-
   if (!response.ok) {
     throw new Error(
       `API server error: ${response.status} ${response.statusText}`,

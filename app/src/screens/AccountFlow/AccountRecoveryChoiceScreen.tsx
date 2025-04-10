@@ -14,17 +14,23 @@ import RestoreAccountSvg from '../../images/icons/restore_account.svg';
 import { ExpandableBottomLayout } from '../../layouts/ExpandableBottomLayout';
 import { useAuth } from '../../stores/authProvider';
 import { usePassport } from '../../stores/passportDataProvider';
+import { usePassportProcessing } from '../../stores/passportProcessingProvider';
 import { useSettingStore } from '../../stores/settingStore';
 import { STORAGE_NAME, useBackupMnemonic } from '../../utils/cloudBackup';
 import { black, slate500, slate600, white } from '../../utils/colors';
-import { isUserRegistered } from '../../utils/proving/payload';
 
 interface AccountRecoveryChoiceScreenProps {}
 
 const AccountRecoveryChoiceScreen: React.FC<
   AccountRecoveryChoiceScreenProps
 > = ({}) => {
-  const { passportData, privateKey, restorefromSecret, status } = usePassport();
+  const {
+    passportData,
+    restorefromSecret,
+    passportAndSecretStatus,
+    privateKey,
+  } = usePassport();
+  const { isRegistered } = usePassportProcessing();
   const [restoring, setRestoring] = useState(false);
   const { cloudBackupEnabled, toggleCloudBackupEnabled } = useSettingStore();
   const { biometricAvailablity } = useAuth();
@@ -38,7 +44,7 @@ const AccountRecoveryChoiceScreen: React.FC<
     try {
       const mnemonic = await download();
       try {
-        if (status !== 'success') {
+        if (passportAndSecretStatus !== 'success') {
           return;
         }
         const secret = await restorefromSecret(mnemonic.phrase);
@@ -49,7 +55,6 @@ const AccountRecoveryChoiceScreen: React.FC<
           return;
         }
 
-        const isRegistered = await isUserRegistered(passportData, privateKey);
         console.log('User is registered:', isRegistered);
         if (!isRegistered) {
           console.log(
@@ -85,7 +90,8 @@ const AccountRecoveryChoiceScreen: React.FC<
     navigation.navigate,
     passportData,
     toggleCloudBackupEnabled,
-    status,
+    passportAndSecretStatus,
+    isRegistered,
   ]);
 
   return (

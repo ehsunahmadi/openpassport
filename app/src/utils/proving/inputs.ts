@@ -10,59 +10,35 @@ import {
   PASSPORT_ATTESTATION_ID,
   attributeToPosition,
 } from '../../../../common/src/constants/constants';
-import { EndpointType, SelfApp } from '../../../../common/src/utils/appType';
-import { getCircuitNameFromPassportData } from '../../../../common/src/utils/circuits/circuitsName';
+import { SelfApp } from '../../../../common/src/utils/appType';
 import {
   generateCircuitInputsDSC,
   generateCircuitInputsRegister,
   generateCircuitInputsVCandDisclose,
 } from '../../../../common/src/utils/circuits/generateInputs';
 import { hashEndpointWithScope } from '../../../../common/src/utils/scope';
-import {
-  getCSCATree,
-  getCommitmentTree,
-  getDSCTree,
-} from '../../../../common/src/utils/trees';
 import { PassportData } from '../../../../common/src/utils/types';
 
-export async function generateTeeInputsRegister(
+export function generateTeeInputsRegister(
   secret: string,
   passportData: PassportData,
-  endpointType: EndpointType,
+  dscTree: string,
 ) {
-  const serialized_dsc_tree = await getDSCTree(endpointType);
-  const inputs = generateCircuitInputsRegister(
-    secret,
-    passportData,
-    serialized_dsc_tree,
-  );
-  const circuitName = getCircuitNameFromPassportData(passportData, 'register');
-  if (circuitName == null) {
-    throw new Error('Circuit name is null');
-  }
-  return { inputs, circuitName };
+  return generateCircuitInputsRegister(secret, passportData, dscTree);
 }
 
-export async function generateTeeInputsDsc(
+export function generateTeeInputsDsc(
   passportData: PassportData,
-  endpointType: EndpointType,
+  cscaTree: string[][],
 ) {
-  const serialized_csca_tree = await getCSCATree(endpointType);
-  const inputs = generateCircuitInputsDSC(
-    passportData.dsc,
-    serialized_csca_tree,
-  );
-  const circuitName = getCircuitNameFromPassportData(passportData, 'dsc');
-  if (circuitName == null) {
-    throw new Error('Circuit name is null');
-  }
-  return { inputs, circuitName };
+  return generateCircuitInputsDSC(passportData.dsc, cscaTree);
 }
 
-export async function generateTeeInputsVCAndDisclose(
+export function generateTeeInputsVCAndDisclose(
   secret: string,
   passportData: PassportData,
   selfApp: SelfApp,
+  passportTree: string,
 ) {
   const { scope, userId, disclosures, endpoint } = selfApp;
   const scope_hash = hashEndpointWithScope(endpoint, scope);
@@ -87,9 +63,8 @@ export async function generateTeeInputsVCAndDisclose(
   const selector_ofac = disclosures.ofac ? 1 : 0;
 
   const { passportNoAndNationalitySMT, nameAndDobSMT, nameAndYobSMT } =
-    await getOfacSMTs();
-  const serialized_tree = await getCommitmentTree(passportData.documentType);
-  const tree = LeanIMT.import((a, b) => poseidon2([a, b]), serialized_tree);
+    getOfacSMTs();
+  const tree = LeanIMT.import((a, b) => poseidon2([a, b]), passportTree);
   console.log('tree', tree);
   // const commitment = generateCommitment(
   //   secret,
@@ -99,7 +74,7 @@ export async function generateTeeInputsVCAndDisclose(
   // tree.insert(BigInt(commitment));
   // Uncomment to add artificially the commitment to the tree
 
-  const inputs = generateCircuitInputsVCandDisclose(
+  return generateCircuitInputsVCandDisclose(
     secret,
     PASSPORT_ATTESTATION_ID,
     passportData,
@@ -115,12 +90,11 @@ export async function generateTeeInputsVCAndDisclose(
     disclosures.excludedCountries ?? [],
     userId,
   );
-  return { inputs, circuitName: 'vc_and_disclose' };
 }
 
 /*** DISCLOSURE ***/
 
-async function getOfacSMTs() {
+function getOfacSMTs() {
   // TODO: get the SMT from an endpoint
   const passportNoAndNationalitySMT = new SMT(poseidon2, true);
   passportNoAndNationalitySMT.import(passportNoAndNationalitySMTData);
